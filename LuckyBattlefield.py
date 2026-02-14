@@ -35,6 +35,8 @@ class LuckyBattlefieldGUI:
         self.current_battle_enemy = None
         self.current_chest = None
         self.p_name = ""
+        self.pos = [0, 0]
+        self.map_pos = [0, 0]
 
         # ---------- Fonts ----------
         self.font_main = ("Courier New", max(12, window_h // 45), "bold")
@@ -152,16 +154,20 @@ class LuckyBattlefieldGUI:
     def process_move(self,dx,dy):
         if self.game_state not in ["WORLD","INVENTORY","CHEST"]: return
         if self.game_state=="WORLD":
-            nx,ny = self.player.pos[0]+dx,self.player.pos[1]+dy
+            self.player.map_pos[0] += dx
+            self.player.map_pos[1] += dy
 
-            # Detect wrap-around
-            wrapped=False
-            if nx<0 or nx>=GRID_SIZE or ny<0 or ny>=GRID_SIZE:
+            nx = self.player.pos[0] += dx
+            ny = self.player.pos[1] += dy
+            wrapped = False
+            if ny < 0 or nx >= GRID_SIZE:
                 nx = nx % GRID_SIZE
+                wrapped = True
+            if nx < 0 or ny >= GRID_SIZE:
                 ny = ny % GRID_SIZE
-                wrapped=True
+                wrapped = True
 
-            self.player.pos=[nx,ny]
+            self.player.pos = [nx, ny]
 
             # Spawn new enemies/chests if wrapped
             if wrapped:
@@ -174,6 +180,13 @@ class LuckyBattlefieldGUI:
             # Check for chests
             for c in self.chests:
                 if c.pos==self.player.pos: self.open_chest(c); return
+            if self.player.map_pos == [7, 12]:
+                self.start_final_boss(boss_type=1)
+                return
+            elif self.player.map_pos == [7, 27]:
+                self.start_final_boss(boss_type=2)
+                return
+                
             self.render_world()
         elif self.game_state in ["INVENTORY","CHEST"]:
             if dx!=0: self.player.inv_idx=(self.player.inv_idx+dx)%9
@@ -188,6 +201,11 @@ class LuckyBattlefieldGUI:
         grid=[["." for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
         for c in self.chests: grid[c.pos[1]][c.pos[0]]="!"
         for e in self.enemies: grid[e.pos[1]][e.pos[0]]="E"
+        if self.player.map_pos == [7, 12]:
+            x,y = 7, 12
+            grid_y = y % GRID_SIZE
+            grid_x = x % GRID_SIZE
+            grid[grid_y][grid_x] = "/"
         for y in range(GRID_SIZE-1,-1,-1):
             for x in range(GRID_SIZE):
                 char,tag=grid[y][x],"white"
@@ -198,6 +216,7 @@ class LuckyBattlefieldGUI:
                 if x<GRID_SIZE-1: self.write("|")
             self.write("\n")
         self.write(f"\nHP: {p.hp}/{p.max_hp} | XP: {p.xp}/100\n","green")
+        self.write(f"[{p.map_pos[0]}, {p.map_pos[1]}]", "green")
         self.write("Arrows: Move | E: Inv | B: Stats\n")
 
     # ---------- Inventory ----------
@@ -289,6 +308,15 @@ class LuckyBattlefieldGUI:
             self.write(f"({k}) {v['name']:<10} [{'='*v['charge']}{'-'*(v['max']-v['charge'])}]\n","green")
         self.write("\n(A/S/F/U) or [M] Menu:")
 
+    def start_final_boss(self,boss_type):
+        self.saved_state = {
+            'player': copy.deepcopy(self.player),
+            'enemies': copy.deepcopy(self.enemies),
+            'chests': copy.deepcopy(self.chests),
+        }
+        self.current_battle_enemy = FinalBoss(boss_type)
+        self.game_state="BATTLE"
+
     def process_battle_turn(self,choice):
         if choice=='M': self.game_state="INVENTORY"; self.render_inventory(); return
         p,e=self.player,self.current_battle_enemy
@@ -313,7 +341,17 @@ class LuckyBattlefieldGUI:
         hit=random.randint(1,10)>3
         self.animate_projectile(list(range(ENEMY_COL-1,PLAYER_COL,-1)),"-",not hit,"red",
                                 lambda:self.finish_enemy_hit(dmg,hit))
-
+        if isInstance(e, FinalBoss) and e.hp <= e.max_hp//2 and not e.beam_unlocked:
+            e.beam_unlocked=True
+            e.beam_length=1
+            return
+        if getattr(e,"beam_unlocked",False):
+            e.beam_length += 1
+            beam_line = "=" * e.beam_length
+            self.render_battle(beam_line, "blue")
+            if self.player.hp <= self.player.max_hp//20:
+                self.player.symbol = f"({self.player.symbol})"
+                
     def finish_enemy_hit(self,dmg,hit):
         if hit: self.player.hp-=dmg
         self.render_battle(f"ENEMY HIT! {dmg} DMG" if hit else "ENEMY MISS!","red")
@@ -342,6 +380,13 @@ class LuckyBattlefieldGUI:
             self.enemies.remove(self.current_battle_enemy)
         self.game_state="WORLD"
         self.render_world()
+
+    def victory(self):
+        e=self.current_battle_enemy
+        if isinstance(e, FinalBoss) and e.hp <= 0:
+            self.write(f"{e.name} dropped a key!\n","blue")
+            self.player.inventory[0] = "K"  # place in first slot
+        super().victory()
 
     def game_over(self):
         self.game_state="GAMEOVER"
@@ -381,8 +426,27 @@ class Chest:
         pool=["H","A","R","W","X"]
         self.items=[random.choice(pool) for _ in range(random.randint(1,3))]
 
+# --------- Final Boss ---------
+class FinalBoss:
+    def __init__(self, boss_type):
+        if boss_type==1:
+            self.name="Soul Phantom"
+            self.hp=1750
+            self.max_hp=1750
+            self.symbol=">"
+            self.color="blue"
+            self.beam_unlocked=False
+        else:
+            self.name="Ultimate Void"
+            self.hp=5000
+            self.max_hp=5000
+            self.symbol=";"
+            self.color="blue"
+            self.beam_unlocked=True
+
 # ---------- Run ----------
 if __name__=="__main__":
     root=tk.Tk()
     game=LuckyBattlefieldGUI(root)
     root.mainloop()
+
