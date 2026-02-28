@@ -36,4 +36,3 @@ jobs:
     - name: Test with pytest
       run: |
         if (Test-Path tests) { pytest }
-        shell: pwsh
